@@ -1,0 +1,784 @@
+---
+title: "An Ensemble Model to Predict the Recurrence of Differentiated Thyroid Cancer: Development and Evaluation"
+subtitle: "DA5030"
+author: "Swarnali Dasgupta"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: true
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+---
+
+
+
+### Project Overview
+
+The data being studied is the **'Differentiated Thyroid Cancer Recurrence'** dataset from the [UC Irvine Machine Learning Repository](https://archive.ics.uci.edu/dataset/915/differentiated+thyroid+cancer+recurrence). This dataset contains **13 clinicopathological features** for **383 patients** aimed at predicting the recurrence of differentiated thyroid cancer as 'yes' or 'no'.  
+
+The dataset was collected over a duration of 15 years, with each patient being followed for at least 10 years. Each row in the data represents a patient, while each column represents a predictive feature.  
+
+Machine learning uses algorithms that learn from data to predict something. These predictions can be generated through supervised learning, where algorithms learn patterns from existing data, or unsupervised learning, where they discover general patterns in data. Machine learning models can predict numerical values based on historical data, categorize events as true or false, and cluster data points based on commonalities. We will be mainly using logistic regression, random forest and kNN models since these models do particularly well with classification tasks. One hot encoding will be used to ensure kNN can handle the data.
+
+#### Objectives
+
+This project aims to:  
+1. Train machine learning models to predict the likelihood of thyroid cancer recurrence.  
+2. Build the following models:  
+   - **Logistic Regression Model**  
+   - **Random Forest Model**  
+   - **k-Nearest Neighbors (kNN) Model**  
+   - **Ensemble Model**  
+3. Compare all models to determine the most efficacious model.  
+
+#### Workflow
+
+1. **Data Acquisition**  
+2. **Data Exploration**  
+3. **Data Cleaning and Shaping**  
+4. **Logistic Regression + Performance Analysis**  
+5. **Random Forest Model + Performance Analysis**  
+6. **kNN Model + Performance Analysis**  
+7. **Model Comparison**  
+8. **Ensemble Model + Performance Analysis**
+
+
+### 1. Data Acquisition
+
+This step involves downloading the data from the repository and reading it into memory. Before this, all prerequisite packages must be downloaded and loaded. 
+
+```{r setup, include=FALSE, message=FALSE}
+#Load all required libraries
+install_if_missing <- function(packages) {
+  new_packages <- packages[!(packages %in% installed.packages()[, "Package"])]
+  if (length(new_packages)) install.packages(new_packages)
+}
+
+#List of required packages
+required_packages <- c("readr", "dplyr", "archive", "caret", "randomForest", "gmodels", "class", "ggplot2", "pROC", "tidyr")
+
+#Install missing packages
+install_if_missing(required_packages)
+
+#Load packages
+lapply(required_packages, library, character.only = TRUE)
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+# Read in the dataset
+url <- ("https://archive.ics.uci.edu/static/public/915/differentiated+thyroid+cancer+recurrence.zip")
+all_data <- read_csv(archive_read(url), show_col_types = FALSE)
+data <- all_data
+```
+
+
+### 2. Data Exploration
+This step involves exploring the data by inspecting the structure and summary of the data, inspecting for missing values and constructing bar plots to visualise the relationship between some of the categorical predictor features and the target variable. We also look for class imbalance, outlier detection & rectification and correlation testing using chi-squared test method.
+
+
+```{r, message=FALSE, warning=FALSE}
+#Explore the data
+str(data)
+#dim(data)
+summary(data)
+ifelse(any(is.na(data)), "NA values present", "No NA values")
+```
+There are 383 patients with 17 clinico-pathological features.
+
+#### Construct plots to explore relationships:
+
+We are constructing barplots to explore relationships between some of the predictor variables and the target variable.
+
+```{r, fig.width=7, fig.height=5, message=FALSE, warning=FALSE}
+#Barplot for Gender vs Recurred (Grouped)
+ggplot(data, aes(x = Gender, fill = Recurred)) +
+  geom_bar(position = "dodge") +  # Use "dodge" for grouped bars
+  labs(title = "Gender vs Recurred",
+       x = "Gender",
+       y = "Count") +
+  theme_minimal()
+#Barplot for Thyroid Function vs Recurred (Grouped)
+ggplot(data, aes(x = `Thyroid Function`, fill = Recurred)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Thyroid Function vs Recurred",
+       x = "Thyroid Function",
+       y = "Count") +
+  theme_minimal()
+
+#Barplot for Pathology vs Recurred (Grouped)
+ggplot(data, aes(x = Pathology, fill = Recurred)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Pathology vs Recurred",
+       x = "Pathology",
+       y = "Count") +
+  theme_minimal()
+
+```
+
+#### Check for class imbalance:
+
+Visualize class imbalance in a table
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+table(data$Recurred)
+```
+
+There appears to be some class imbalance, which we will handle individually for the models by assigning weights or other techniques.
+
+#### Check for outliers in Age column:
+
+Perform outlier detection and rectification
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+mean_age <- mean(data$Age, na.rm = TRUE)
+sd_age <- sd(data$Age, na.rm = TRUE)
+z_scores <- (data$Age - mean_age) / sd_age
+outliers <- abs(z_scores) > 3
+cat("Number of outliers: ", sum(outliers), "\n")
+```
+
+No outliers, hence no need to deal with them.
+
+#### Check for data distribution:
+
+Since all but one of our features are categorical, we will be checking the data distribution for only the Age column.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+#Check for normality in the data
+shapiro.test(data$Age)
+hist(data$Age, main = "Histogram of Age", xlab = "Age", breaks = 10)
+```
+From the results, we can conclude that the 'Age' column is not normally distributed. 
+
+
+#### Correlation analysis:
+
+We used Chi-Square testing to do correlation analysis.
+
+
+```{r, message=FALSE, warning=FALSE}
+target <- "Recurred"
+categorical_columns <- setdiff(colnames(data), c("Age", "Recurred"))
+
+#Perform Chi-Square test for each categorical column to see its correlation with the target column
+chi_sq_results <- lapply(categorical_columns, function(col) {
+  table <- table(data[[col]], data[[target]])
+  result <- chisq.test(table)
+  list(
+    Feature = col,
+    p_value = result$p.value,
+    statistic = result$statistic
+  )
+})
+
+#Convert to dataframe
+chi_sq_results_df <- do.call(rbind, lapply(chi_sq_results, as.data.frame))
+print(chi_sq_results_df)
+```
+
+The predictor features are not independent of the target variable 'Recurred'. There is a strong association between these features and the likelihood of recurrence. Features with significant p-values are potentially valuable predictors for our models.
+
+### 3. Data Cleaning and Shaping
+
+This step involves 'wrangling' the data to fit our model's requirements. First, we impute missing values. Since our dataset does not have any missing values, we must simulate missing values and impute them using the column's mean. We will be doing this for our only numeric column, 'Age'. After this, we will be using one-hot encoding to convert categorical columns into numerical ones so that they can be read using our selected algorithms. Next, we will perform principal component analysis to capture variance, feature engineering to optimise model performance and finally we will normalise the data so that it can be uniformly read by our algorithms. 
+
+#### Identification of missing values:
+
+Remove some values and simulate identification and imputation of missing values
+
+```{r, message=FALSE, warning=FALSE}
+set.seed(123)
+
+#Introduce missing values in column Age
+missing_indices <- sample(1:nrow(data), size = floor(0.1 * nrow(data))) 
+data$Age[missing_indices] <- NA
+#colSums(is.na(data))
+
+#Impute the missing values using mean
+data$Age[is.na(data$Age)] <- mean(data$Age, na.rm = TRUE)
+#colSums(is.na(data))
+```
+
+Missing values were added and successfully imputed using the column mean. The column selected for this exercise is 'Age', since it is the only numerical column in this dataset.
+
+
+#### One-hot encoding to make the columns readable- for Yes and No columns:
+
+We encode the 'Yes' and 'No' columns.
+
+```{r, message=FALSE, warning=FALSE}
+#Create a mapping function to automate
+mappings <- list(
+  Gender = c("M" = 1, "F" = 0),
+  Smoking = c("Yes" = 1, "No" = 0),
+  'Hx Smoking' = c("Yes" = 1, "No" = 0),
+  'Hx Radiothreapy' = c("Yes" = 1, "No" = 0),
+  Recurred = c("Yes" = 1, "No" = 0)
+)
+
+binary_encoding <- function(data, col.name, mappings) {
+  if (col.name %in% names(mappings)) {
+    data[[col.name]] <- mappings[[col.name]][data[[col.name]]]
+  }
+  return(data)  
+}
+
+#Apply the mapping function
+for (colname in colnames(data)) {
+  data <- binary_encoding(data, colname, mappings)
+}
+```
+
+#### One-hot encoding to make columns readable- for categorical columns:
+
+We encode the categorical columns.
+
+
+```{r, message=FALSE, warning=FALSE}
+#Handle the dataset to isolate the categorical columns
+categorical_columns <- c("Adenopathy", "Thyroid Function", "Physical Examination", "Pathology", "Focality", "Risk", "T", "N", "M", "Stage", "Response")
+categorical_df <- data[, categorical_columns]
+data <- data[, !colnames(data) %in% categorical_columns]
+
+#Use caret package to create one hot encoding
+dummies <- dummyVars(" ~ .", data = categorical_df) 
+one_hot_encoded <- predict(dummies, newdata = categorical_df)
+one_hot_encoded <- as.data.frame(one_hot_encoded)
+
+#cbind to original dataframe
+data <- cbind(data, one_hot_encoded)
+
+#Make syntactically valid column names
+colnames(data) <- make.names(colnames(data))
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+#### Principal component analysis
+pca_result <- prcomp(data, center = TRUE, scale. = TRUE)
+#summary(pca_result)
+plot(pca_result, type = "l", main = "Scree Plot showing Principal Components")
+```
+
+#### Clean up column names to make processing easier:
+
+Here we reassign column names.
+
+```{r, message=FALSE, warnings=FALSE}
+#Remove spaces in the column names using gsub
+colnames(data) <- gsub("^X.", "", colnames(data))
+#colnames
+
+#colnames(train.data) <- gsub(" ", ".", colnames(train.data))
+#colnames(train.data) <- gsub("`", "", colnames(train.data))
+#colnames(train.data) <- gsub("-", ".", colnames(train.data))
+```
+
+#### Feature engineering by combining T, N and M scores to give a combined risk score: 
+`
+Since T, N, and M are part of the widely accepted TNM staging system used in oncology, they are naturally correlated and can be analyzed together by combining them into 'Severity' score.
+
+```{r, message=FALSE, warnings=FALSE}
+#Calculate severity for T
+data$T_severity <- (1 * data$TT1a) + (2 * data$TT1b) + (3 * data$TT2) +
+                   (4 * data$TT3a) + (5 * data$TT3b) + (6 * data$TT4a) + (7 * data$TT4b)
+#Calculate severity for N
+data$N_severity <- (0 * data$NN0) + (1 * data$NN1a) + (2 * data$NN1b)
+#Calculate severity for M
+data$M_severity <- (0 * data$MM0) + (1 * data$MM1)
+
+#Combine into a single Severity score
+data$Severity <- data$T_severity + data$N_severity + data$M_severity
+summary(data$Severity)
+table(data$Severity)
+```
+
+
+#### Normalize the age and severity columns using min-max scaling:
+
+Normalization is an important step to ensure the model treats the features equally.
+
+
+```{r}
+#Normalize Age
+data$Scaled.Age <- (data$Age - min(data$Age))/(max(data$Age) - min(data$Age))
+data <- data[, !colnames(data) %in% "Age"]
+
+#Normalize Severity
+data$Severity <- (data$Severity - min(data$Severity))/(max(data$Severity) - min(data$Severity))
+backup_data <- data
+```
+
+All of our data is now cleaned and shaped. Further shaping is to be done for individual models. 
+
+
+### 4. Logistic Regression + Performance Analysis
+
+A logistic regression model is a supervised machine learning algorithm that performs classification tasks by predicting the probability of an outcome. Logistic regression is used for binary classification where we use sigmoid function, that takes input as independent variables and produces a probability value between 0 and 1. It can be either Yes or No, 0 or 1, true or False, etc. but instead of giving the exact value as 0 and 1, it gives the probabilistic values which lie between 0 and 1. Here, we will also use bagging with homogenous learners to boost the model's performance. Once the model is built, we will be using metrics like accuracy, sensitivity, precision, ROC curve and AUC values to gauge the model's performance.
+
+#### Model building:
+
+This step involves the crux of this model- building it. We tidy the data more for this algorithm and set up the design.
+
+```{r, message=FALSE, warning=FALSE}
+data <- backup_data
+set.seed(456)
+
+#Create data split
+cols_to_remove <- grep("^(TT|NN|MM)", colnames(data), value = TRUE)
+data <- data[, !colnames(data) %in% cols_to_remove]
+
+train.index <- createDataPartition(data$Recurred, p = 0.7, list = FALSE)
+train.data <- data[train.index,]
+test.data <- data[-train.index,]
+
+#Replace 0 with "Not recurred" and 1 with "Recurred"
+train.data$Recurred <- factor(train.data$Recurred, levels = c(0, 1), labels = c("Not recurred", "Recurred"))
+test.data$Recurred <- factor(test.data$Recurred, levels = c(0, 1), labels = c("Not recurred", "Recurred"))
+
+#Relevel the Recurred column
+train.data$Recurred <- relevel(train.data$Recurred, ref = "Recurred")
+test.data$Recurred <- relevel(test.data$Recurred, ref = "Recurred")
+
+
+#Set number of bootstrap iterations and create a matrix to store
+n_bags <- 25
+bagging_predictions <- matrix(NA, nrow = nrow(test.data), ncol = n_bags)
+
+#Perform bagging
+for (i in 1:n_bags) {
+  #Bootstrap sampling
+  bootstrap_idx <- sample(1:nrow(train.data), replace = TRUE)
+  train_bootstrap <- train.data[bootstrap_idx, ]
+  total_samples <- nrow(train_bootstrap)
+  weight_recurred <- total_samples / (2 * sum(train_bootstrap$Recurred == "Recurred"))
+  weight_not_recurred <- total_samples / (2 * sum(train_bootstrap$Recurred == "Not recurred"))
+  class_weights <- ifelse(train_bootstrap$Recurred == "Recurred", weight_recurred, weight_not_recurred)
+  
+  #Train the logistic regression model
+  logistic.model <- glm(Recurred ~ ., data = train_bootstrap, family = binomial, weights = class_weights)
+  
+  #Use the model to predict
+  bagging_predictions[, i] <- predict(logistic.model, newdata = test.data, type = "response")
+}
+
+#Combine predictions
+logistic_probabilities <- rowMeans(bagging_predictions)
+
+#Convert to predictions
+logistic_predictions <- ifelse(logistic_probabilities > 0.5, "Not recurred", "Recurred")
+logistic_predictions <- factor(logistic_predictions, levels = levels(test.data$Recurred))
+
+#Confusion Matrix
+conf_matrix <- confusionMatrix(logistic_predictions, test.data$Recurred)
+conf_matrix
+```
+
+#### Performance analysis:
+
+Let us look into how this model has performed by extracting some statistics.
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+#Extract metrics
+lr_accuracy <- conf_matrix$overall['Accuracy']
+cat("Accuracy for logistic regression model: ", lr_accuracy, "\n")
+
+lr_sensitivity <- conf_matrix$byClass["Sensitivity"]
+cat("Sensitivity for logistic regression model: ", lr_sensitivity, "\n")
+
+lr_specificity <- conf_matrix$byClass["Specificity"]
+cat("Specificity for logistic regression model: ", lr_specificity, "\n")
+
+lr_precision <- conf_matrix$byClass['Precision']  
+cat("Precision for logistic regression model: ", lr_precision, "\n")
+
+roc_curve <- roc(
+  response = test.data$Recurred, 
+  predictor = logistic_probabilities,  
+  levels = levels(test.data$Recurred)  
+)
+
+#Plot the ROC curve
+plot(roc_curve, main = "ROC Curve for logistic regression", col = "lightblue", lwd = 2)
+
+#Calculate AUC
+auc_value <- auc(roc_curve)
+cat("AUC for logistic regression model: ", auc_value, "\n")
+```
+
+The accuracy, precision, sensitivity and specificity metrics help us infer a lot about how the model is performing. The confusion matrix printed above shows that the model is performing well in a sense that it is recognizing the 'Recurred' and 'Not recurred' groups correctly, with some more false positives than false negatives. In medicine, this is a good practice because it enables physicians to err on the side of caution. The accuracy seems to be quite good; the ROC curve gives further evidence regarding good model performance and the AUC value seems good as well. However, such a high AUC value could also indicate some over fitting, so that should be further investigated. 
+
+
+
+### 5. Random Forest Model + Performance Analysis
+
+Random Forest algorithm is a powerful machine learning algorithm used for both classification and regression tasks, that works by creating a number of decision trees during the training phase. Each tree is constructed using a random subset of the data set to measure a random subset of features in each partition. This randomness introduces variability among individual trees thereby reducing the risk of over fitting. The package randomForest inherently uses bagging to boost its performance, and hence we will not be bagging explicitly. Once the model is built, we will be using metrics like accuracy, sensitivity, precision, ROC curve and AUC values to gauge the model's performance.
+
+#### Model building:
+
+This step involves the crux of this model- building it. We tidy the data more for this algorithm and set up the design.
+
+
+```{r, message=FALSE, warning=FALSE}
+data <- backup_data
+
+#Create data split
+cols_to_remove <- grep("^(TT|NN|MM)", colnames(data), value = TRUE)
+data <- data[, !colnames(data) %in% cols_to_remove]
+train.index <- createDataPartition(data$Recurred, p = 0.7, list = FALSE)
+train.data <- data[train.index,]
+test.data <- data[-train.index,]
+
+#Generate labels for the knn function
+train.labels <- train.data$Recurred
+test.labels <- test.data$Recurred
+
+#Replace 0 with "Not recurred" and 1 with "Recurred" for better clarity
+train.labels <- factor(train.labels, levels = c(0, 1), labels = c("Not recurred", "Recurred"))
+test.labels <- factor(test.labels, levels = c(0, 1), labels = c("Not recurred", "Recurred"))
+
+#Relevel the Recurred column
+train.labels <- factor(train.labels, levels = c("Recurred", "Not recurred"))
+test.labels <- factor(test.labels, levels = c("Recurred", "Not recurred"))
+
+#Remove the recurred column from the test and train sets
+train.data <- train.data[, -which(colnames(train.data) == "Recurred")]
+test.data <- test.data[, -which(colnames(test.data) == "Recurred")]
+
+#Fit the random forest model
+rf.model <- randomForest(x = train.data, y = train.labels, ntree = 100, mtry = sqrt(ncol(train.data)), importance = TRUE)
+print(rf.model)
+
+#Predict test data using the model
+rf.probabilities <- predict(rf.model, newdata = test.data)
+
+#Create a confusion matrix
+conf_matrix <- confusionMatrix(rf.probabilities, test.labels)
+conf_matrix
+```
+
+#### Performance analysis:
+
+Let us look into how this model has performed by extracting some statistics.
+
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+#Extract metrics
+rf_accuracy <- conf_matrix$overall['Accuracy']
+cat("Accuracy for random forest model: ", rf_accuracy, "\n")
+
+rf_sensitivity <- conf_matrix$byClass["Sensitivity"]
+cat("Sensitivity for random forest model: ", rf_sensitivity, "\n")
+
+rf_specificity <- conf_matrix$byClass["Specificity"]
+cat("Specificity for random forest model: ", rf_specificity, "\n")
+
+rf_precision <- conf_matrix$byClass['Precision']
+cat("Precision for random forest model: ", rf_precision, "\n")
+
+#AUC and ROC Curve
+rf.probabilities <- predict(rf.model, newdata = test.data, type = "prob")[, "Recurred"]
+roc_curve <- roc(test.labels, rf.probabilities, levels = rev(levels(test.labels)))
+plot(roc_curve, main = "ROC Curve (Random Forest)", col = "blue", lwd = 2)
+
+auc_value <- auc(roc_curve)
+cat("AUC for random forest model: ", auc_value, "\n")
+```
+
+The accuracy, precision, sensitivity and specificity metrics help us infer a lot about how the model is performing. The confusion matrix printed above shows that the model is performing extremely well in a sense that it is recognizing the 'Recurred' and 'Not recurred' groups correctly; however, this model has some false negatives. In medicine, this is not a good practice since physicians cannot err on the side of caution, and the model can incorrectly classify no cancer recurrence even though there is a likelihood of cancer occurence. The accuracy seems to be quite good; the ROC curve gives further evidence regarding good model performance and the AUC value seems good as well. However, such a high AUC value could also indicate some over fitting, like the logistic regression model, so that should be further investigated. 
+
+
+### 6. KNN model
+
+The K-Nearest Neighbors (KNN) algorithm is a supervised machine learning method employed to tackle classification and regression problems. KNN is one of the most basic yet essential classification algorithms in machine learning. It belongs to the supervised learning domain. It is widely used in real-life scenarios since it is non-parametric, which means it does not make any  assumptions about the distribution of data. 
+
+#### Model building:
+
+This step involves the crux of this model- building it. We tidy the data more for this algorithm and set up the design.
+
+
+```{r, message=FALSE, warning=FALSE}
+data <- backup_data
+
+set.seed(456)
+#Create data split
+train.index <- createDataPartition(data$Recurred, p = 0.7, list = FALSE)
+train.data <- data[train.index,]
+test.data <- data[-train.index,]
+
+#Generate labels for the knn function
+train.labels <- train.data$Recurred
+test.labels <- test.data$Recurred
+
+#Replace 0 with "Not recurred" and 1 with "Recurred" for better clarity
+train.labels <- factor(train.labels, levels = c(0, 1), labels = c("Not recurred", "Recurred"))
+test.labels <- factor(test.labels, levels = c(0, 1), labels = c("Not recurred", "Recurred"))
+
+#Relevel the Recurred column
+train.labels <- factor(train.labels, levels = c("Recurred", "Not recurred"))
+test.labels <- factor(test.labels, levels = c("Recurred", "Not recurred"))
+
+#Remove the recurred column from the test and train sets
+train.data <- train.data[, -which(colnames(train.data) == "Recurred")]
+test.data <- test.data[, -which(colnames(test.data) == "Recurred")]
+
+#Normalize the data
+preProc <- preProcess(train.data, method = c("center", "scale"))
+train.data <- predict(preProc, train.data)
+test.data <- predict(preProc, test.data)
+
+#Define k-fold cross-validation control
+levels(train.labels) <- make.names(levels(train.labels))
+levels(test.labels) <- make.names(levels(test.labels))
+train_control <- trainControl(method = "cv", number = 5, classProbs = TRUE)
+k_values <- data.frame(k = 2:15)  
+
+#Train the cross validation
+knn.cv <- train(
+  x = train.data,
+  y = train.labels,
+  method = "knn",
+  trControl = train_control,
+  tuneGrid = k_values
+)
+
+#Select best k value
+k = 3
+cat("Best k: 3")
+plot(knn.cv)
+
+#Predict using model
+knn.probabilities <- predict(knn.cv, newdata = test.data)
+
+#Confusion Matrix
+conf_matrix <- confusionMatrix(knn.probabilities, test.labels)
+conf_matrix
+```
+
+
+#### Performance analysis:
+
+Let us look into how this model has performed by extracting some statistics.
+
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+#Extract metrics
+knn_accuracy <- conf_matrix$overall["Accuracy"]
+cat("Accuracy for kNN model: ", knn_accuracy, "\n")
+
+knn_sensitivity <- conf_matrix$byClass["Sensitivity"]
+cat("Sensitivity for kNN model: ", knn_sensitivity, "\n")
+
+knn_specificity <- conf_matrix$byClass["Specificity"]
+cat("Specificity for kNN model: ", knn_specificity, "\n")
+
+knn_precision <- conf_matrix$byClass["Precision"]
+cat("Precision for kNN model: ", knn_precision, "\n")
+
+#Fit k-NN with caret
+train_control <- trainControl(method = "none", classProbs = TRUE)
+knn.caret <- train(
+  x = train.data,
+  y = train.labels,
+  method = "knn",
+  trControl = train_control,
+  tuneGrid = data.frame(k = 3)
+)
+
+#Predict probabilities
+knn.probabilities <- predict(knn.caret, newdata = test.data, type = "prob")[, "Recurred"]
+
+#Compute AUC and plot ROC curve
+roc_curve <- roc(test.labels, knn.probabilities, levels = rev(levels(test.labels)))
+auc_value <- auc(roc_curve)
+cat("AUC: ", auc_value, "\n")
+plot(roc_curve, main = "ROC Curve (k-NN)", col = "blue", lwd = 2)
+
+```
+
+The accuracy, precision, sensitivity and specificity metrics help us infer a lot about how the model is performing. The confusion matrix printed above shows that the model is performing decently well in a sense that it is recognizing the 'Recurred' and 'Not recurred' groups correctly; however, this model has quite a lot of false negatives and also some false positives. In medicine, this is not a good practice since physicians cannot err on the side of caution, and the model can incorrectly classify no cancer recurrence even though there is a likelihood of cancer occurrence. The accuracy seems to be quite good; the ROC curve gives further evidence regarding good model performance and the AUC value seems good as well. 
+
+
+
+### 7. **Model comparison**
+
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+#Combine metrics into a dataframe
+model_comparison <- data.frame(
+  Model = c("Logistic Regression", "Random Forest", "k-NN"),
+  Accuracy = c(lr_accuracy, rf_accuracy, knn_accuracy),
+  Sensitivity = c(lr_sensitivity, rf_sensitivity, knn_sensitivity),
+  Specificity = c(lr_specificity, rf_specificity, knn_specificity),
+  Precision = c(lr_precision, rf_precision, knn_precision)
+)
+
+#Display the dataframe
+model_comparison
+```
+
+The table above appropriately shows the strengths and weaknesses of each model. When we look at accuracy, random forest model does the best because of how strong the model is inherently- it can work with multiple data types and uses multiple decision trees to reach a decision. However, when it comes to sensitivity, logistic regression is doing the best, while kNN is doing the best in case of specificity. The random forest model seems to show some evidence of over fitting, which has probably been caused due to some amount of data leakage. This must be investigated and rectified before deploying this model in practice. 
+
+### 8. **Ensemble Model + Performance Analysis**  
+
+Ensemble models are a machine learning approach to combine multiple other models in the prediction process. These models are referred to as base estimators. Ensemble models allow us to overcome the technical challenges of building a single estimator and instead combines the benefits of all the base estimators.
+We chose a voting ensemble to combine the strengths of our models and achieve more balanced and reliable predictions. By averaging the probabilities (soft voting), the ensemble helps to offset the weaknesses of individual models, reduces variability, and improves the chances of making accurate predictions. This approach works especially well when the models have similar but slightly different levels of accuracy across various parts of the dataset.
+
+#### Ensemble model function:
+
+Let us build the ensemble model.
+
+```{r, message=FALSE, warning=FALSE}
+
+#Construct a function for ensemble model
+ensemble_model <- function(logistic_model, rf_model, knn_model, test_data, test_labels) {
+  #Logistic Regression
+  lr_probabilities_recurred <- predict(logistic_model, newdata = test_data, type = "response")
+  lr_probabilities_not_recurred <- 1 - lr_probabilities_recurred
+
+  #Random Forest
+  rf_probabilities_recurred <- predict(rf_model, newdata = test_data, type = "prob")[, "Recurred"]
+  rf_probabilities_not_recurred <- predict(rf_model, newdata = test_data, type = "prob")[, "Not recurred"]
+
+  #kNN
+  knn_probabilities_recurred <- predict(knn_model, newdata = test_data, type = "prob")[, "Recurred"]
+  knn_probabilities_not_recurred <- predict(knn_model, newdata = test_data, type = "prob")[, "Not.recurred"]
+
+  #Average probabilities across models
+  ensemble_probabilities <- data.frame(
+    Not.recurred = (lr_probabilities_not_recurred + rf_probabilities_not_recurred + knn_probabilities_not_recurred) / 3,
+    Recurred = (lr_probabilities_recurred + rf_probabilities_recurred + knn_probabilities_recurred) / 3
+  )
+
+  #Predict the class with the highest probability
+  ensemble_predictions <- ifelse(
+    ensemble_probabilities$Recurred > ensemble_probabilities$Not.recurred,
+    "Recurred", "Not.recurred"
+  )
+
+  #Convert to factor with the same levels as test_labels
+  ensemble_predictions <- factor(ensemble_predictions, levels = levels(test_labels))
+
+  #Build confusion matrix
+  conf_matrix_ensemble <- confusionMatrix(ensemble_predictions, test_labels)
+  return(list(
+  predictions = ensemble_predictions,
+  probabilities = ensemble_probabilities,
+  conf_matrix = conf_matrix_ensemble
+))
+}
+```
+
+#### Apply the ensemble model:
+
+We will use the function we built above on our pre-built base models.
+```{r, message=FALSE, warning=FALSE}
+#Use the function built above on our models
+ensemble.model <- ensemble_model(
+  logistic_model = logistic.model,
+  rf_model = rf.model,
+  knn_model = knn.caret,
+  test_data = test.data,
+  test_labels = test.labels
+)
+ensemble_probabilities <- ensemble.model$probabilities
+conf_matrix <- ensemble.model$conf_matrix
+conf_matrix
+```
+
+#### Performance analysis:
+
+Let us look into how this model has performed by extracting some statistics.
+
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+#Extract metrics of ensemble model
+ensemble_accuracy <- conf_matrix$overall["Accuracy"]
+cat("Accuracy for ensemble model: ", ensemble_accuracy, "\n")
+
+ensemble_sensitivity <- conf_matrix$byClass["Sensitivity"]
+cat("Sensitivity for ensemble model: ", ensemble_sensitivity, "\n")
+
+ensemble_specificity <- conf_matrix$byClass["Specificity"]
+cat("Specificity for kNN model: ", ensemble_specificity, "\n")
+
+ensemble_precision <- conf_matrix$byClass["Precision"]
+cat("Precision for kNN model: ", ensemble_precision, "\n")
+
+#Generate ROC curve
+roc_curve <- roc(
+  test.labels,
+  ensemble_probabilities$Recurred, 
+  levels = levels(test.labels),
+  direction = ">"
+)
+#Plot the ROC curve
+plot(roc_curve, col = "lightblue", lwd = 2, main = "ROC Curve for Ensemble Model")
+abline(a = 0, b = 1, lty = 2, col = "lightpink")  
+
+#Calculate AUC
+auc_value <- auc(roc_curve)
+cat("AUC for ensemble model: ", auc_value, "\n")
+```
+
+
+The accuracy, precision, sensitivity and specificity metrics help us infer a lot about how the model is performing. The confusion matrix printed above shows that the model is performing decently well in a sense that it is recognizing the 'Recurred' and 'Not recurred' groups correctly; however, this model has quite a lot of false negatives and also some false positives. In medicine, this is not a good practice since physicians cannot err on the side of caution, and the model can incorrectly classify no cancer recurrence even though there is a likelihood of cancer occurrence. The accuracy seems to be quite good; the ROC curve gives further evidence regarding good model performance and the AUC value seems good as well. 
+
+#### Compare ensemble model with other models:
+
+Let us compare the ensemble model to the other models individually.
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+#Create a dataframe for comparing the models
+ensemble_model_comparison <- data.frame(
+  Model = c("Logistic Regression", "Random Forest", "k-NN", "Ensemble Model"),
+  Accuracy = c(lr_accuracy, rf_accuracy, knn_accuracy, ensemble_accuracy),
+  Sensitivity = c(lr_sensitivity, rf_sensitivity, knn_sensitivity, ensemble_sensitivity),
+  Specificity = c(lr_specificity, rf_specificity, knn_specificity, ensemble_specificity),
+  Precision = c(lr_precision, rf_precision, knn_precision, ensemble_precision)
+)
+
+ensemble_model_comparison
+
+#Convert data to long form
+comparison_long <- pivot_longer(
+  ensemble_model_comparison,
+  cols = Accuracy:Precision,
+  names_to = "Metric",
+  values_to = "Value"
+)
+
+#Create a plot for comparison
+ggplot(comparison_long, aes(x = Model, y = Value, fill = Model)) +
+  geom_bar(stat = "identity", position = "dodge", show.legend = FALSE) +
+  facet_wrap(~Metric, scales = "free_y") +
+  theme_minimal() +
+  labs(
+    title = "Performance Metrics Across Models",
+    y = "Value",
+    x = "Model"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1), 
+    strip.text = element_text(size = 12, face = "bold")  
+  )
+```
+
+
+These barplots give us insight into how the ensemble model fairs when compared to the other base models. In terms of the metrics being studied, it can be inferred that the ensemble model seems to be doing the best, closely followed by the logistic regression model. Hence, either of these models can be used to efficiently predict the recurrence of thyroid cancer in practice. However, some fine tuning may be necessary to reduce chances of over fitting to give accurate and reliable results.
+
+### Conclusion
+
+This brings us to the end of this project where we successfully built models and accurately predicted the recurrence of thyroid cancer. Our choice of models is justified since all three models selected work well with classification data like this dataset, particularly random forest and logistic regression.
+
+
+
+
+
+
+
+
+
