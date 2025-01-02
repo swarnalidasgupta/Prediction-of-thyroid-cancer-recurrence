@@ -50,6 +50,8 @@ This step involves downloading the data from the repository and reading it into 
 
 ```{r setup, include=FALSE, message=FALSE}
 #Load all required libraries
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
 install_if_missing <- function(packages) {
   new_packages <- packages[!(packages %in% installed.packages()[, "Package"])]
   if (length(new_packages)) install.packages(new_packages)
