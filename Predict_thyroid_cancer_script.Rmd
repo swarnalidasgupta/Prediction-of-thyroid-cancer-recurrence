@@ -1,6 +1,5 @@
 ---
 title: "An Ensemble Model to Predict the Recurrence of Differentiated Thyroid Cancer: Development and Evaluation"
-subtitle: "DA5030"
 author: "Swarnali Dasgupta"
 date: "`r Sys.Date()`"
 output:
